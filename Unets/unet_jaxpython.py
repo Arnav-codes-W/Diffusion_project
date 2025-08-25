@@ -53,7 +53,7 @@ class ResidualBlock(nn.Module):
         
         # Initialize conv2 to zeros like in JAX version
         nn.init.zeros_(self.conv2.weight)
-        nn.init.zeros_(self.conv2.bias)
+        nn.init.zeros_(self.conv2.bias)f
         
         # Shortcut connection if channels change
         if in_ch != self.out_ch:
@@ -154,7 +154,6 @@ class AttentionBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    """A UNet architecture."""
     def __init__(self, num_classes, ch, emb_ch, out_ch, ch_mult, num_res_blocks,
                  attn_resolutions, num_heads=None, head_dim=None, dropout=0.0,
                  logsnr_input_type="linear", logsnr_scale_range=(-10., 10.),
@@ -270,7 +269,7 @@ class UNet(nn.Module):
         nn.init.zeros_(self.conv_out.weight)
         nn.init.zeros_(self.conv_out.bias)
 
-    def forward(self, x, logsnr, y, train=False):
+    def forward(self, x, logsnr, y =1, train=False):
         B, C, H, W = x.shape
         assert H == W
         assert logsnr.shape == (B,)
@@ -317,7 +316,7 @@ class UNet(nn.Module):
                     h = self.down_samples[i_level](h)
                 hs.append(h)
         
-        # Middle
+        # Middle``
         h = self.mid_block1(h, emb, deterministic=not train)
         h = self.mid_attn(h)
         h = self.mid_block2(h, emb, deterministic=not train)
@@ -349,43 +348,43 @@ class UNet(nn.Module):
     
 
 
-model_config = dict(
-    num_classes=1,
-    ch=256,
-    emb_ch=1024,
-    out_ch=6,  # e.g., RGB output
-    ch_mult=(1, 1, 1),
-    num_res_blocks=3,
-    attn_resolutions=(8, 16),
-    num_heads=1,
-    dropout=0.2,
-    logsnr_input_type="inv_cos",
-    resblock_resample=True,
-)
+# model_config = dict(
+#     num_classes=1,
+#     ch=256,
+#     emb_ch=1024,
+#     out_ch=6,  # e.g., RGB output
+#     ch_mult=(1, 1, 1),
+#     num_res_blocks=3,
+#     attn_resolutions=(8, 16),
+#     num_heads=1,
+#     dropout=0.2,
+#     logsnr_input_type="inv_cos",
+#     resblock_resample=True,
+# )
 
-import torch
-from unet_jax1 import UNet  # your UNet implementation
+# import torch
+# from unet_jax1 import UNet  # your UNet implementation
 
-# UNet config
-model_config = dict(
-    num_classes=1,
-    ch=256,
-    emb_ch=1024,
-    out_ch=6,
-    ch_mult=(1, 1, 1),
-    num_res_blocks=3,
-    attn_resolutions=(8, 16),
-    num_heads=1,
-    dropout=0.2,
-    logsnr_input_type="inv_cos",
-    resblock_resample=True,
-)
+# # UNet config
+# model_config = dict(
+#     num_classes=1,
+#     ch=256,
+#     emb_ch=1024,
+#     out_ch=6,
+#     ch_mult=(1, 1, 1),
+#     num_res_blocks=3,
+#     attn_resolutions=(8, 16),
+#     num_heads=1,
+#     dropout=0.2,
+#     logsnr_input_type="inv_cos",
+#     resblock_resample=True,
+# )
 
-# Instantiate model
-model = UNet(**model_config)
+# # Instantiate model
+# model = UNet(**model_config)
 
-# Function to count parameters
-def count_params(model):
-    return sum(p.numel() for p in model.parameters())
+# # Function to count parameters
+# def count_params(model):
+#     return sum(p.numel() for p in model.parameters())
 
-print("Total parameters:", count_params(model))
+# print("Total parameters:", count_params(model))
