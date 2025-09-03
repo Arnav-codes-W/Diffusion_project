@@ -46,20 +46,31 @@ class Swish(nn.Module):
 class ResnetBlock(nn.Module):
     """Convolutional residual block."""
 
-    def __init__(self, in_ch, out_ch=None, dropout=0.0, resample=None):
+    def __init__(self, in_ch, out_ch=None, dropout=0.0, resample=None, emb_ch=1024):
         super().__init__()
         self.in_ch = in_ch
         self.out_ch = out_ch if out_ch is not None else in_ch
         self.dropout = dropout
         self.resample = resample
         
-        self.norm1 = nn.GroupNorm(32, in_ch)
+        # Ensure group norm works with any number of channels
+        # Use min(32, in_ch) to handle cases where in_ch < 32
+        groups1 = min(32, in_ch)
+        while in_ch % groups1 != 0 and groups1 > 1:
+            groups1 -= 1
+        self.norm1 = nn.GroupNorm(groups1, in_ch)
+        
         self.conv1 = nn.Conv2d(in_ch, self.out_ch, 3, padding=1)
         
-        # Time embedding projection
-        self.temb_proj = nn.Linear(1024, 2 * self.out_ch)  # emb_ch = 512  change 512 se 1024 
+        # Time embedding projection - make emb_ch configurable
+        self.temb_proj = nn.Linear(emb_ch, 2 * self.out_ch)
         
-        self.norm2 = nn.GroupNorm(32, self.out_ch)
+        # Same logic for second norm
+        groups2 = min(32, self.out_ch)
+        while self.out_ch % groups2 != 0 and groups2 > 1:
+            groups2 -= 1
+        self.norm2 = nn.GroupNorm(groups2, self.out_ch)
+        
         self.dropout_layer = nn.Dropout(dropout)
         self.conv2 = nn.Conv2d(self.out_ch, self.out_ch, 3, padding=1)
         
@@ -79,7 +90,7 @@ class ResnetBlock(nn.Module):
         B, C, H, W = x.shape
         assert emb.shape[0] == B and len(emb.shape) == 2
         
-        h = self.swish(self.norm1(x))  
+        h = self.swish(self.norm1(x))
         
         # Handle resampling
         if self.resample == 'up':
@@ -125,8 +136,13 @@ class AttnBlock(nn.Module):
             assert ch % head_dim == 0
             self.head_dim = head_dim
             self.num_heads = ch // head_dim
-            
-        self.norm = nn.GroupNorm(32, ch)
+        
+        # Ensure group norm works with any number of channels
+        groups = min(32, ch)
+        while ch % groups != 0 and groups > 1:
+            groups -= 1
+        self.norm = nn.GroupNorm(groups, ch)
+        
         self.q = nn.Linear(ch, ch)
         self.k = nn.Linear(ch, ch)
         self.v = nn.Linear(ch, ch)
@@ -159,6 +175,17 @@ class AttnBlock(nn.Module):
         return x + h
 
 
+class UpsampleModule(nn.Module):
+    """Proper upsample module."""
+    def __init__(self, ch):
+        super().__init__()
+        self.conv = nn.Conv2d(ch, ch, 3, padding=1)
+    
+    def forward(self, x):
+        x = nearest_neighbor_upsample(x)
+        return self.conv(x)
+
+
 class UNet(nn.Module):
     """A UNet architecture."""
 
@@ -175,7 +202,8 @@ class UNet(nn.Module):
                  logsnr_input_type='inv_cos',
                  logsnr_scale_range=(-10., 10.),
                  resblock_resample=False,
-                 head_dim=None):
+                 head_dim=None,
+                 input_size=32):
         super().__init__()
         
         self.num_classes = num_classes
@@ -191,6 +219,7 @@ class UNet(nn.Module):
         self.logsnr_scale_range = logsnr_scale_range
         self.resblock_resample = resblock_resample
         self.head_dim = head_dim
+        self.input_size = input_size
         
         num_resolutions = len(ch_mult)
         
@@ -207,83 +236,93 @@ class UNet(nn.Module):
         # Initial convolution
         self.conv_in = nn.Conv2d(3, ch, 3, padding=1)
         
+        # Build the network architecture
         # Downsampling blocks
         self.down_blocks = nn.ModuleList()
-        ch_list = [ch]
+        self.down_sample = nn.ModuleList()
+        
+        # Keep track of all channel dimensions for skip connections
+        skip_channels = [ch]  # Start with initial conv output
+        current_ch = ch
         
         for i_level in range(num_resolutions):
             blocks = nn.ModuleList()
             out_ch_level = ch * ch_mult[i_level]
             
             for i_block in range(num_res_blocks):
-                in_ch_block = ch_list[-1] if i_block == 0 else out_ch_level
-                print(i_level, i_block, in_ch_block, out_ch_level, ch_list[-1])
-
-                blocks.append(ResnetBlock(in_ch_block, out_ch_level, dropout))
-                ch_list.append(out_ch_level)
+                blocks.append(ResnetBlock(current_ch, out_ch_level, dropout, emb_ch=emb_ch))
+                current_ch = out_ch_level
+                skip_channels.append(current_ch)
                 
                 # Add attention if at specified resolution
-                if 32 // (2 ** i_level) in attn_resolutions:  # Assuming 32x32 input
-                    blocks.append(AttnBlock(out_ch_level, num_heads, head_dim))
+                current_res = self.input_size // (2 ** i_level)
+                if current_res in attn_resolutions:
+                    blocks.append(AttnBlock(current_ch, num_heads, head_dim))
             
             self.down_blocks.append(blocks)
             
             # Downsample (except for last level)
             if i_level != num_resolutions - 1:
                 if resblock_resample:
-                    downsample = ResnetBlock(out_ch_level, out_ch_level, dropout, resample='down')
+                    downsample = ResnetBlock(current_ch, current_ch, dropout, 
+                                           resample='down', emb_ch=emb_ch)
                 else:
-                    downsample = nn.Conv2d(out_ch_level, out_ch_level, 3, stride=2, padding=1)
-                self.down_blocks.append(nn.ModuleList([downsample]))
-                ch_list.append(out_ch_level)
+                    downsample = nn.Conv2d(current_ch, current_ch, 3, stride=2, padding=1)
+                self.down_sample.append(downsample)
+                skip_channels.append(current_ch)
+            else:
+                self.down_sample.append(None)
         
         # Middle blocks
-        mid_ch = ch * ch_mult[-1]
-        self.mid_block1 = ResnetBlock(mid_ch, mid_ch, dropout)
+        mid_ch = current_ch
+        self.mid_block1 = ResnetBlock(mid_ch, mid_ch, dropout, emb_ch=emb_ch)
         self.mid_attn = AttnBlock(mid_ch, num_heads, head_dim)
-        self.mid_block2 = ResnetBlock(mid_ch, mid_ch, dropout)
+        self.mid_block2 = ResnetBlock(mid_ch, mid_ch, dropout, emb_ch=emb_ch)
         
         # Upsampling blocks
         self.up_blocks = nn.ModuleList()
+        self.up_sample = nn.ModuleList()
+        
+        # Reverse the skip_channels for upsampling
+        skip_channels_up = skip_channels[::-1]  # Make a copy and reverse
+        skip_idx = 0
         
         for i_level in reversed(range(num_resolutions)):
+            # Upsample first (except for the deepest level)
+            if i_level != num_resolutions - 1:
+                if resblock_resample:
+                    upsample = ResnetBlock(current_ch, current_ch, dropout, 
+                                         resample='up', emb_ch=emb_ch)
+                else:
+                    upsample = UpsampleModule(current_ch)
+                self.up_sample.append(upsample)
+            else:
+                self.up_sample.append(None)
+            
             blocks = nn.ModuleList()
             out_ch_level = ch * ch_mult[i_level]
             
             for i_block in range(num_res_blocks + 1):
                 # Calculate input channels (current + skip connection)
-                skip_ch = ch_list.pop()
-                in_ch_block = mid_ch + skip_ch if i_block == 0 else out_ch_level + skip_ch
-                blocks.append(ResnetBlock(in_ch_block, out_ch_level, dropout))
+                skip_ch = skip_channels_up[skip_idx]
+                skip_idx += 1
+                in_ch_block = current_ch + skip_ch
+                
+                blocks.append(ResnetBlock(in_ch_block, out_ch_level, dropout, emb_ch=emb_ch))
+                current_ch = out_ch_level
                 
                 # Add attention if at specified resolution
-                if 32 // (2 ** i_level) in attn_resolutions:  # Assuming 32x32 input
-                    blocks.append(AttnBlock(out_ch_level, num_heads, head_dim))
+                current_res = self.input_size // (2 ** i_level)
+                if current_res in attn_resolutions:
+                    blocks.append(AttnBlock(current_ch, num_heads, head_dim))
             
             self.up_blocks.append(blocks)
-            
-            # Upsample (except for first level)
-            if i_level != 0:
-                if resblock_resample:
-                    upsample = ResnetBlock(out_ch_level, out_ch_level, dropout, resample='up')
-                else:
-                    # Create a proper upsample module
-                    class UpsampleModule(nn.Module):
-                        def __init__(self, ch):
-                            super().__init__()
-                            self.conv = nn.Conv2d(ch, ch, 3, padding=1)
-                        
-                        def forward(self, x):
-                            x = nearest_neighbor_upsample(x)
-                            return self.conv(x)
-                    
-                    upsample = UpsampleModule(out_ch_level)
-                self.up_blocks.append(nn.ModuleList([upsample]))
-            
-            mid_ch = out_ch_level
         
         # Output layers
-        self.norm_out = nn.GroupNorm(32, ch)
+        groups_out = min(32, ch)
+        while ch % groups_out != 0 and groups_out > 1:
+            groups_out -= 1
+        self.norm_out = nn.GroupNorm(groups_out, ch)
         self.conv_out = nn.Conv2d(ch, out_ch, 3, padding=1)
         
         # Initialize conv_out to zeros
@@ -321,47 +360,48 @@ class UNet(nn.Module):
         # Initial convolution
         h = self.conv_in(x)
         hs = [h]
-        
         # Downsampling
-        for blocks in self.down_blocks:
-            for block in blocks:
+        
+        for i_level in range(len(self.ch_mult)):
+            # ResNet blocks
+            for block in self.down_blocks[i_level]:
                 if isinstance(block, ResnetBlock):
                     h = block(h, emb)
                 elif isinstance(block, AttnBlock):
                     h = block(h)
-                else:  # Downsample layer
-                    if self.resblock_resample:
-                        h = block(h, emb)
-                    else:
-                        h = block(h)
                 hs.append(h)
-        
+            
+            # Downsample
+            if self.down_sample[i_level] is not None:
+                if self.resblock_resample:
+                    h = self.down_sample[i_level](h, emb)
+                else:
+                    h = self.down_sample[i_level](h)
+                hs.append(h)
         # Middle
         h = self.mid_block1(h, emb)
         h = self.mid_attn(h)
         h = self.mid_block2(h, emb)
-        
         # Upsampling
-        for blocks in self.up_blocks:
-            for block in blocks:
+        for i_level in range(len(self.ch_mult)):
+            for block in self.up_blocks[i_level]:
                 if isinstance(block, ResnetBlock):
                     skip = hs.pop()
+                    if h.shape[2:] != skip.shape[2:]:
+                        h = F.interpolate(h, size=skip.shape[2:], mode='nearest')
                     h = torch.cat([h, skip], dim=1)
                     h = block(h, emb)
                 elif isinstance(block, AttnBlock):
                     h = block(h)
-                else:  # Upsample layer
-                    if self.resblock_resample:
-                        h = block(h, emb)
-                    else:
-                        if callable(block):
-                            h = block(h)
-                        else:
-                            for layer in block:
-                                h = layer(h) if not callable(layer) else layer(h)
-        
+            
+            # Upsample
+            if self.up_sample[i_level] is not None:
+                if self.resblock_resample:
+                    h = self.up_sample[i_level](h, emb)
+                else:
+                    h = self.up_sample[i_level](h)
+
         # Output
         h = self.swish(self.norm_out(h))
         h = self.conv_out(h)
-        
         return h

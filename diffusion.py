@@ -46,6 +46,7 @@ def make_beta_schedule(
 
 def E_(input, t, shape):
     #ensuring t is not negative
+    #print (f't = {t}')
     t=torch.clamp(t,min=0)
     
     out = torch.gather(input, 0, t)
@@ -66,6 +67,7 @@ def noise_like(shape, noise_fn, device, repeat=False):
 class GaussianDiffusion:
 
     def __init__(self, net, betas, time_scale=1, sampler="ddim"):
+        sampler ='ddpm'
         super().__init__()
         self.net_ = net
         self.time_scale = time_scale
@@ -108,7 +110,7 @@ class GaussianDiffusion:
         eps_pred = self.inference(z.float(), t.float(), extra_args)
         return F.mse_loss(eps_pred,noise)
 
-    ''' def q_posterior(self, x_0, x_t, t):
+    def q_posterior(self, x_0, x_t, t):
         mean = E_(self.posterior_mean_coef1, t, x_t.shape) * x_0 \
                + E_(self.posterior_mean_coef2, t, x_t.shape) * x_t
         var = E_(self.posterior_variance, t, x_t.shape)
@@ -125,14 +127,9 @@ class GaussianDiffusion:
         return mean, var, log_var
 
     #not usefull  
-    def p_sample_ddpm(self, x, t, extra_args, clip_denoised=True, **kwargs):
-        mean, _, log_var = self.p_mean_variance(x, t, extra_args, clip_denoised)
-        noise = torch.randn_like(x)
-        shape = [x.shape[0]] + [1] * (x.ndim - 1)
-        nonzero_mask = (1 - (t == 0).type(torch.float32)).view(*shape)
-        return mean + nonzero_mask * torch.exp(0.5 * log_var) * noise '''
     
-    '''def p_sample_clipped(self, x, t, extra_args, eta=0, clip_denoised=True, clip_value=3):
+    
+    def p_sample_clipped(self, x, t, extra_args, eta=0, clip_denoised=True, clip_value=3):
         v = self.inference(x.float(), t, extra_args)
         alpha, sigma = self.get_alpha_sigma(x, t)
         # if clip_denoised:
@@ -155,11 +152,12 @@ class GaussianDiffusion:
             pred = pred * alpha_ + eps * adjusted_sigma
             if eta:
                 pred += torch.randn_like(pred) * ddim_sigma
-        return pred'''
+        return pred
 
 
 #sampling using DDIM methodology 
     def p_sample_ddim(self, x, t, extra_args, eta=0, clip_denoised=True):
+        print('t',t)
         eps = self.inference(x.float(), t.float(), extra_args).double()[:, -3:, :, :]
         alpha_t, sigma_t = self.get_alpha_sigma(x, t)
 
@@ -177,6 +175,7 @@ class GaussianDiffusion:
         ddim_sigma = eta * ((1 - alpha_t_prev**2) / (1 - alpha_t**2)).sqrt() * (1 - (alpha_t**2 / alpha_t_prev**2)).sqrt()
         mean_pred = alpha_t_prev * x0_pred + (1-alpha_t_prev**2 - ddim_sigma**2).sqrt() * eps
 
+        # return mean_pred
         if eta == 0:
             return mean_pred
         else:
@@ -186,6 +185,7 @@ class GaussianDiffusion:
 
     @torch.no_grad()
     def p_sample_loop(self, x, extra_args, eta=0):
+        #print('calling my ahh')
         mode = self.net_.training
         self.net_.eval()
         for i in reversed(range(self.num_timesteps)):
@@ -199,6 +199,12 @@ class GaussianDiffusion:
         sigma = E_(self.sqrt_one_minus_alphas_cumprod, t, x.shape)
         return alpha, sigma
 
+    def p_sample_ddpm(self, x, t, extra_args, clip_denoised=True, **kwargs):
+            mean, _, log_var = self.p_mean_variance(x, t, extra_args, clip_denoised)
+            noise = torch.randn_like(x)
+            shape = [x.shape[0]] + [1] * (x.ndim - 1)
+            nonzero_mask = (1 - (t == 0).type(torch.float32)).view(*shape)
+            return mean + nonzero_mask * torch.exp(0.5 * log_var) * noise 
 
 
 
@@ -236,63 +242,6 @@ class GaussianDiffusionDefault(GaussianDiffusion):
        
         my_rec = (alpha_s * z - sigma_s * v).clip(-1, 1)
         return F.mse_loss(w * v.float(), w * v_2.float())
-    
-     
-
-    # def distill_loss(self, student_diffusion, x, t, extra_args, eps=None, student_device=None):
-    #     if eps is None:
-    #         eps = torch.randn_like(x)
-            
-    #     with torch.no_grad():
-    #      z_list = []
-    #      alpha_list = []
-    #      sigma_list = []
-    #      rec_list=[]
-    #      v_list=[]
-         
-    #      for i in range (self.args.k):
-    #         alpha, sigma = self.get_alpha_sigma(x, t-i)
-    #         alpha_list.append(alpha)
-    #         sigma_list.append(sigma)
-
-    #         if i == 0:
-    #             z = alpha * x + sigma * eps
-    #             z_list.append(z)
-
-    #             v = self.inference(z.float(), t.float() , extra_args).double() # function used to get teacher prediction of velocity 
-    #             v_list.append(v)
-
-    #             rec = (alpha * z - sigma * v).clip(-1, 1)
-    #             rec_list.append(rec)
-
-    #         else :
-    #             z= alpha_list[i] * rec_list[i-1] + (sigma_list[i] / sigma_list[i-1]) * (z_list[i-1] - alpha_list[i-1]* rec_list[i-1])
-    #             z_list.append(z)
-
-    #             v = self.inference(z_list[i].float(), t.float() -i , extra_args).double()
-    #             v_list.append(v)
-
-    #             rec = (alpha * z_list[i] - sigma * v_list[i]).clip(-1, 1)
-    #             rec_list.append(rec)
-        
-    #      alpha_s, sigma_s = student_diffusion.get_alpha_sigma(x, t // (self.args.k))
-
-    #     """ x = (alpha_list[self.args.k-1] * z_list[self.args.k-1] - sigma_list[self.args.k-1] * v_list[self.args.k-1]).clip(-1, 1) # final recreated image at t-k
-    #      eps_new = (z_list[0] - alpha_s * x) / sigma_s  # noise using final rec img which should be student noise prediction , (z original used kyuki map the steps)
-    #      v_new = alpha_s * eps_new - sigma_s * x   #v which student has to predict """
-
-    #     v_final =  torch.cat(v_list, dim=1)
-    # print(f"v_final shape = {v_final.shape}")
-      
-    #         if self.gamma == 0:
-    #             w = 1
-    #     else:
-    #         w = torch.pow(1 + alpha_s / sigma_s, self.gamma)
-        
-    #     v = student_diffusion.net_(z.float(), t.float() // (self.args.k), **extra_args) #predcited v by student 
-
-
-    #     return F.mse_loss(w * v.float(), w * v_final.float())  
            
          
         
@@ -317,7 +266,7 @@ class GaussianDiffusionDefault(GaussianDiffusion):
                 z_list.append(z)
 
                 v = self.inference(z.float(), t.float() , extra_args).double() # function used to get teacher prediction of velocity 
-               # print (f'v_teacher ={v.shape}')
+               
                 v_list.append(v)
 
                 rec = (alpha * z - sigma * v).clip(-1, 1)
@@ -335,10 +284,7 @@ class GaussianDiffusionDefault(GaussianDiffusion):
         
          alpha_s, sigma_s = student_diffusion.get_alpha_sigma(x, t // (self.args.k))
 
-        """ x = (alpha_list[self.args.k-1] * z_list[self.args.k-1] - sigma_list[self.args.k-1] * v_list[self.args.k-1]).clip(-1, 1) # final recreated image at t-k
-         eps_new = (z_list[0] - alpha_s * x) / sigma_s  # noise using final rec img which should be student noise prediction , (z original used kyuki map the steps)
-         v_new = alpha_s * eps_new - sigma_s * x   #v which student has to predict """
-
+       
         v_final =  torch.cat(v_list, dim=1)
 
 
@@ -349,15 +295,64 @@ class GaussianDiffusionDefault(GaussianDiffusion):
 
         
         v = student_diffusion.net_(z.float(), t.float() // (self.args.k), **extra_args) #predcited v by student 
+        B, C, H, W = v.shape
+        eps_pred_t1, eps_pred_t= torch.split(v, C//(self.args.k), dim=1)
+        eps_t1, eps_t= torch.split(v_final, C//(self.args.k), dim=1)
+        l1 = F.mse_loss(w*eps_pred_t1.float(),w*eps_t1.float())
+        l2 = F.mse_loss(w*eps_pred_t.float(),w*eps_t.float())
+
       #  print (f'v_final.shape = {v_final.shape}' )
        # print (f'v.shape = {v.shape}' )
         #print (f'size of the weight matrix of student model{student_diffusion.net_.out[2].weight.shape}')
-        return F.mse_loss(w * v.float(), w * v_final.float())  
-            
-           
+        #return F.mse_loss(w * v.float(), w * v_final.float())  
+        return l1 + l2
+        # eps_tensor = torch.chunk(student_out, self.args.k , dim = 1)
+        # #print (shape(eps_tensor))
+        # Loss_list =[]
+
+        # for i , eps in enumerate(eps_tensor):
+        #     L = F.mse_loss(eps[i],v_list[i] )
+        #     Loss_list.append(L)
+        
+        # return sum(Loss_list[:]).float()      
 
 
+        
             
+         
+       
+        #return F.mse_loss(w * v.float(), w * v_final.float())  
+
+    # def distill_loss_(self, student_diffusion, x, t, extra_args, eps=None, student_device=None):
+    #     if eps is None:
+    #         eps = torch.randn_like(x)
+    #     with torch.no_grad():
+    #         # Step t+1
+    #         alpha_t1, sigma_t1 = self.get_alpha_sigma(x, t + 1)
+    #         z = alpha_t1 * x + sigma_t1 * eps
+    #         eps_t1 = self.inference(z.float(), (t + 1).float(), extra_args)
+
+    #         # Step t
+    #         rec_t = (alpha_t1 * z - sigma_t1 * eps_t1).clip(-1, 1)
+    #         alpha_t, sigma_t = self.get_alpha_sigma(x, t)
+    #         z_t = alpha_t * rec_t + (sigma_t / sigma_t1) * (z - alpha_t1 * rec_t)
+    #         eps_t = self.inference(z_t.float(), t.float(), extra_args)
+
+    #         student_out = student_diffusion.net_(z.float(), t.float(), extra_args)
+    #         B, C, H, W = student_out.shape
+
+    #         # Split student output into 3 
+    #         eps_pred_t1, eps_pred_t= torch.split(student_out, C//2, dim=1)
+
+    #         l_1 = F.mse_loss(eps_pred_t1, eps_t1) 
+    #         l_2 = F.mse_loss(eps_pred_t, eps_t)
+
+    #         return (l_1.float() + l_2.float())
+                
+            
+
+
+                
 
 
 

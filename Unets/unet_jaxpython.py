@@ -53,7 +53,7 @@ class ResidualBlock(nn.Module):
         
         # Initialize conv2 to zeros like in JAX version
         nn.init.zeros_(self.conv2.weight)
-        nn.init.zeros_(self.conv2.bias)f
+        nn.init.zeros_(self.conv2.bias)
         
         # Shortcut connection if channels change
         if in_ch != self.out_ch:

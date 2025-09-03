@@ -25,6 +25,7 @@ def make_argument_parser():
     parser.add_argument("--ckpt_interval", help="Checkpoints saving interval in minutes.", type=int, default=30)
     parser.add_argument("--num_workers", type=int, default=-1)
     parser.add_argument ("--k", type=int, default=1)
+    parser.add_argument("--num_steps", type = int , default =1000)
     return parser
 
 
@@ -32,6 +33,7 @@ def make_argument_parser():
 
 @torch.no_grad() #basically the sampling loop using diffusionn object 
 def p_sample_loop(diffusion, noise, extra_args, device, eta=0, samples_to_capture=-1, need_tqdm=True , clip_value =3): #removed clip value
+    print('calling my ahh')
     mode = diffusion.net_.training
     diffusion.net_.eval()
     img = noise
@@ -41,13 +43,15 @@ def p_sample_loop(diffusion, noise, extra_args, device, eta=0, samples_to_captur
     next_capture = c_step
     if need_tqdm:
         iter_ = tqdm(iter_)
+    
     for i in iter_:
+        print('i',i)
         img = diffusion.p_sample(
             img,
             torch.full((img.shape[0],), i, dtype=torch.int64).to(device),
             extra_args,
             eta=eta,
-        # clip_value =clip_value
+            # clip_value=clip_value
         )
         if diffusion.num_timesteps - i > next_capture:
             imgs.append(img)
@@ -56,7 +60,6 @@ def p_sample_loop(diffusion, noise, extra_args, device, eta=0, samples_to_captur
     diffusion.net_.train(mode)
     return imgs
 
-# ????
 def make_none_args(img, label, device):
     return {}
 
@@ -64,22 +67,22 @@ def make_none_args(img, label, device):
 def default_iter_callback(N, loss, last=False):
     None
 
-
 def make_visualization_(diffusion, device, image_size, need_tqdm=False, eta=0, clip_value=1.2):
     extra_args = {}
     noise = torch.randn(image_size, device=device)
-    imgs = p_sample_loop(diffusion, noise, extra_args, device, samples_to_capture=-1,#5
+    imgs = p_sample_loop(diffusion, noise, extra_args, device, samples_to_capture=10,#5
                          need_tqdm=need_tqdm, eta=eta, clip_value=clip_value)
-    print("Captured steps:", len(imgs))
-    #images_ = [img.squeeze(0) for img in imgs]  # list of (C, H, W)
-    #images_ = torch.cat(images_, dim=1)  # concat on height
-    final_img= imgs[-1].squeeze(0)
-    return final_img
+    #print("Captured steps:", len(imgs))
+    images_ = [img.squeeze(0) for img in imgs]  # list of (C, H, W)
+    images_ = torch.cat(images_, dim=1)  # concat on height
+    #final_img= imgs[-1].squeeze(0)
+    return images_
 
 
 def make_visualization(diffusion, device, image_size, need_tqdm=False, eta=0, clip_value=1.2):
     images_ = make_visualization_(diffusion, device, image_size, need_tqdm=need_tqdm, eta=eta, clip_value=clip_value)
-    print(images_.shape)  
+    #print(images_.shape)  
+    print("Image min/max before clipping:", images_.min().item(), images_.max().item())
     images_ = images_.permute(1, 2, 0).cpu().numpy()  # (H, W, C)
     images_ = (255 * (images_ + 1) / 2).clip(0, 255).astype(np.uint8)
     return images_
@@ -140,32 +143,40 @@ class DiffusionTrain:
     def __init__(self, scheduler):
         self.scheduler = scheduler
 
-    def train(self, train_loader, diffusion, model_ema, model_lr, device, make_extra_args=make_none_args, on_iter=default_iter_callback):
+    def train(self, diffusion,  model_ema, model_lr, device,args , make_dataset,  make_extra_args=make_none_args, on_iter=default_iter_callback ):
         scheduler = self.scheduler
-        total_steps = len(train_loader)
-        scheduler.init(diffusion, model_lr, total_steps)
         diffusion.net_.train()
         print(f"Training...")
-        pbar = tqdm(train_loader)
         N = 0
         L_tot = 0
-        #actual training loop where loops for every image in the dataset and uses the p_loss method 
-        for img, label in pbar:
-            scheduler.zero_grad()
-            img = img.to(device)
-            time = torch.randint(0, diffusion.num_timesteps, (img.shape[0],), device=device)
-            extra_args = make_extra_args(img, label, device)
-            #actuall diffusion loss
-            loss = diffusion.p_loss(img, time, extra_args)
-            L_tot += loss.item()
-            N += 1
-            pbar.set_description(f"Loss: {L_tot / N}")
-            loss.backward()
+        j=1
+        pbar = tqdm(range(args.num_steps))
+        #actual training loop where loops for every image in the dataset and uses the p_loss method
+        for i in pbar :
+            train_dataset = InfinityDataset(make_dataset(),args.batch_size)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+            scheduler.init(diffusion, model_lr, args.num_steps)
+            # pbar = tqdm(train_loader)
+            #this loop only runs once and is redundant 
+            for img, label in train_loader:
+                # print('\n',"epoch",j)
+                j += 1
+                scheduler.zero_grad()
+                img = img.to(device)
+                time = torch.randint(0, diffusion.num_timesteps, (img.shape[0],), device=device)
+                extra_args = make_extra_args(img, label, device)
+                #actuall diffusion loss
+                loss = diffusion.p_loss(img, time, extra_args)
+                L_tot += loss.item()
+                N += 1
+                pbar.set_description(f"Loss: {L_tot / N}")
+                loss.backward()
+           
             nn.utils.clip_grad_norm_(diffusion.net_.parameters(), 1)
             scheduler.step()
             moving_average(diffusion.net_, model_ema)
             on_iter(N, loss.item())
-            if scheduler.stop(N, total_steps):
+            if scheduler.stop(N, args.num_steps):
                 break
         on_iter(N, loss.item(), last=True)
 
@@ -179,33 +190,40 @@ class DiffusionDistillation:
         self.scheduler = scheduler
         self.args = args   #intitialized args here for using k
 
-    def train_student_debug(self, distill_train_loader, teacher_diffusion, student_diffusion, student_ema, student_lr , device, make_extra_args=make_none_args, on_iter=default_iter_callback ):
-        total_steps = len(distill_train_loader)
+    def train_student_debug(self, make_dataset, args ,teacher_diffusion, student_diffusion, student_ema, student_lr , device, make_extra_args=make_none_args, on_iter=default_iter_callback ):
+        #total_steps = len(distill_train_loader)
         scheduler = self.scheduler
-        scheduler.init(student_diffusion, student_lr, total_steps)
+        #scheduler.init(student_diffusion, student_lr, total_steps)
         teacher_diffusion.net_.eval()
         student_diffusion.net_.train()
         print(f"Distillation...")
-        pbar = tqdm(distill_train_loader)
+        pbar = tqdm(range(args.num_steps))
         N = 0
         L_tot = 0
+        j=1
+        for i in pbar :
+            train_dataset = InfinityDataset(make_dataset(),args.batch_size)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+            scheduler.init(student_diffusion, student_lr, args.num_steps)
         #actual loop where distillation happens 
-        for img, label in pbar:
-            scheduler.zero_grad()
-            img = img.to(device)
-            # need to change thisss 2 to k
-            time = (self.args.k)*torch.randint(0, student_diffusion.num_timesteps, (img.shape[0],), device=device)
-            extra_args = make_extra_args(img, label, device)
-            #actuall distillation loss 
-            loss = teacher_diffusion.distill_loss(student_diffusion, img, time, extra_args)
-            L = loss.item()
-            L_tot += L
-            N += 1
-            pbar.set_description(f"Loss: {L_tot / N}")
-            loss.backward()
+            for img, label in train_loader:
+                scheduler.zero_grad()
+                j+=1
+                img = img.to(device)
+                # need to change thisss 2 to k
+                time = (self.args.k)*torch.randint(0, student_diffusion.num_timesteps, (img.shape[0],), device=device)
+                extra_args = make_extra_args(img, label, device)
+                #actuall distillation loss 
+                loss = teacher_diffusion.distill_loss(student_diffusion, img, time, extra_args)
+                L = loss.item()
+                L_tot += L
+                N += 1
+                pbar.set_description(f"Loss: {L_tot / N}")
+                loss.backward()
+
             scheduler.step()
             moving_average(student_diffusion.net_, student_ema)
-            if scheduler.stop(N, total_steps):
+            if scheduler.stop(N, args.num_steps):
                 break
             on_iter(N, loss.item())
         on_iter(N, loss.item(), last=True)
@@ -213,30 +231,30 @@ class DiffusionDistillation:
 
 
 #same as the above function ???
-    def train_student(self, distill_train_loader, teacher_diffusion, student_diffusion, student_ema, student_lr, device, make_extra_args=make_none_args, on_iter=default_iter_callback):
-        scheduler = self.scheduler
-        total_steps = len(distill_train_loader)
-        scheduler.init(student_diffusion, student_lr, total_steps)
-        teacher_diffusion.net_.eval()
-        student_diffusion.net_.train()
-        print(f"Distillation...")
-        pbar = tqdm(distill_train_loader)
-        N = 0
-        L_tot = 0
-        for img, label in pbar:
-            scheduler.zero_grad()
-            img = img.to(device)
-            time = 2 * torch.randint(0, student_diffusion.num_timesteps, (img.shape[0],), device=device)
-            extra_args = make_extra_args(img, label, device)
-            loss = teacher_diffusion.distill_loss(student_diffusion, img, time, extra_args)
-            L = loss.item()
-            L_tot += L
-            N += 1
-            pbar.set_description(f"Loss: {L_tot / N}")
-            loss.backward()
-            scheduler.step()
-            moving_average(student_diffusion.net_, student_ema)
-            if scheduler.stop(N, total_steps):
-                break
-            on_iter(N, loss.item())
-        on_iter(N, loss.item(), last=True)
+    # def train_student(self, distill_train_loader, teacher_diffusion, student_diffusion, student_ema, student_lr, device, make_extra_args=make_none_args, on_iter=default_iter_callback):
+    #     scheduler = self.scheduler
+    #     total_steps = len(distill_train_loader)
+    #     scheduler.init(student_diffusion, student_lr, total_steps)
+    #     teacher_diffusion.net_.eval()
+    #     student_diffusion.net_.train()
+    #     print(f"Distillation...")
+    #     pbar = tqdm(distill_train_loader)
+    #     N = 0
+    #     L_tot = 0
+    #     for img, label in pbar:
+    #         scheduler.zero_grad()
+    #         img = img.to(device)
+    #         time = 2 * torch.randint(0, student_diffusion.num_timesteps, (img.shape[0],), device=device)
+    #         extra_args = make_extra_args(img, label, device)
+    #         loss = teacher_diffusion.distill_loss(student_diffusion, img, time, extra_args)
+    #         L = loss.item()
+    #         L_tot += L
+    #         N += 1
+    #         pbar.set_description(f"Loss: {L_tot / N}")
+    #         loss.backward()
+    #         scheduler.step()
+    #         moving_average(student_diffusion.net_, student_ema)
+    #         if scheduler.stop(N, total_steps):
+    #             break
+    #         on_iter(N, loss.item())
+    #     on_iter(N, loss.item(), last=True)

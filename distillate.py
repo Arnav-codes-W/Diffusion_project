@@ -25,6 +25,7 @@ def make_argument_parser():
     parser.add_argument("--ckpt_interval", help="Checkpoints saving interval in minutes.", type=int, default=30)
     parser.add_argument("--num_workers", type=int, default=-1)
     parser.add_argument ("--k", type=int, default=1)
+    parser.add_argument("--num_steps", type = int , default = 1000)
     return parser
 
 def distill_model(args, make_model, make_dataset):
@@ -39,7 +40,7 @@ def distill_model(args, make_model, make_dataset):
     print(' '.join(f'{k}={v}' for k, v in vars(args).items()))
 
     device = torch.device("cuda")
-    train_dataset = test_dataset = InfinityDataset(make_dataset(), args.num_iters)
+    train_dataset = test_dataset = InfinityDataset(make_dataset(), args.batch_size)
 
      # len(train_dataset), len(test_dataset)
 
@@ -94,8 +95,8 @@ def distill_model(args, make_model, make_dataset):
     old_state_dict = ckpt["G"]
 
    
-    out_weight_key = "out.2.weight"
-    out_bias_key = "out.2.bias"
+    out_weight_key = "conv_out.weight"
+    out_bias_key = "conv_out.bias"
 
    
     old_out_weight = old_state_dict[out_weight_key]  
@@ -155,7 +156,7 @@ def distill_model(args, make_model, make_dataset):
         student_ema.load_state_dict(ckpt["G"])
         del ckpt
 
-    distill_train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    #distill_train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     tensorboard = SummaryWriter(os.path.join(checkpoints_dir, "tensorboard"))
 
@@ -174,8 +175,8 @@ def distill_model(args, make_model, make_dataset):
     on_iter = make_iter_callback(student_ema_diffusion, device, checkpoints_dir, image_size, tensorboard, args.log_interval, args.ckpt_interval, False)
 
 
-    #Main distillation 
-    distillation_model.train_student_debug(distill_train_loader, teacher_ema_diffusion, student_diffusion, student_ema, args.lr, device, make_extra_args=make_condition, on_iter=on_iter)
+    #Main  
+    distillation_model.train_student_debug(make_dataset,args, teacher_ema_diffusion, student_diffusion, student_ema, args.lr, device, make_extra_args=make_condition, on_iter=on_iter)
     print("Finished.")
 
 

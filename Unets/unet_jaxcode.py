@@ -204,6 +204,7 @@ class UNet(nn.Module):
     del y
 
     # Downsampling
+    print(x.shape)
     hs = [nn.Conv(
         features=ch, kernel_size=(3, 3), strides=(1, 1), name='conv_in')(x)]
     for i_level in range(num_resolutions):
@@ -224,16 +225,16 @@ class UNet(nn.Module):
       if i_level != num_resolutions - 1:
         hs.append(self._downsample(
             hs[-1], name=f'down_{i_level}.downsample', emb=emb, train=train))
-
     # Middle
     h = hs[-1]
+    print(h.shape)
     h = ResnetBlock(dropout=self.dropout, name='mid.block_1')(
         h, emb=emb, deterministic=not train)
     h = AttnBlock(
         num_heads=self.num_heads, head_dim=self.head_dim, name='mid.attn_1')(h)
     h = ResnetBlock(dropout=self.dropout, name='mid.block_2')(
         h, emb=emb, deterministic=not train)
-
+    print(h.shape)
     # Upsampling
     for i_level in reversed(range(num_resolutions)):
       # Residual blocks for this resolution
@@ -249,11 +250,13 @@ class UNet(nn.Module):
               num_heads=self.num_heads,
               head_dim=self.head_dim,
               name=f'up_{i_level}.attn_{i_block}')(h)
+          
       # Upsample
       if i_level != 0:
         h = self._upsample(
             h, name=f'up_{i_level}.upsample', emb=emb, train=train)
     assert not hs
+    
 
     # End
     h = nonlinearity(Normalize(name='norm_out')(h))

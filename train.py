@@ -23,6 +23,7 @@ def make_argument_parser():
     parser.add_argument("--ckpt_interval", help="Checkpoints saving interval in minutes.", type=int, default=30)
     parser.add_argument("--num_workers", type=int, default=-1)
     parser.add_argument ("--k", type=int, default=1)
+    parser.add_argument("--num_steps", type = int , default =1000)
     return parser
 
 
@@ -34,14 +35,14 @@ def train_model(args, make_model, make_dataset):
     print(' '.join(f'{k}={v}' for k, v in vars(args).items()))
 
     device = torch.device("cuda")
-    train_dataset = test_dataset = InfinityDataset(make_dataset(), args.num_iters)
+    #train_dataset = test_dataset = InfinityDataset(make_dataset(), args.num_iters)
 
      # len(train_dataset), len(test_dataset)
 
-    img, anno = train_dataset[0]
+    #img, anno = train_dataset[0]
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    #train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    #test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
     teacher_ema = make_model(args ).to(device)
 
@@ -89,7 +90,7 @@ def train_model(args, make_model, make_dataset):
 
     on_iter = make_iter_callback(teacher_ema_diffusion, device, checkpoints_dir, image_size, tensorboard, args.log_interval, args.ckpt_interval, False)
     diffusion_train = DiffusionTrain(scheduler)
-    diffusion_train.train(train_loader, teacher_diffusion, teacher_ema, args.lr, device, make_extra_args=make_condition, on_iter=on_iter)
+    diffusion_train.train( teacher_diffusion, teacher_ema, args.lr, device,args ,make_dataset,  make_extra_args=make_condition, on_iter=on_iter)
     print("Finished.")
 
 if __name__ == "__main__":
