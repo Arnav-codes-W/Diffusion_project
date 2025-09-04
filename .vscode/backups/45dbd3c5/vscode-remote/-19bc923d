@@ -57,7 +57,7 @@ vscode-remote://vscode-01jzaze4hzn6sscj02462jvhh6.studio.lightning.ai/teamspace/
     }
    ],
    "source": [
-    "!python ./train.py --module cifar10_u --name cifar10 --num_timesteps 1024 --dname original --batch_size 128 --num_workers 4 --num_iters 128 --num_steps 100000\n"
+    "#!python ./train.py --module cifar10_u --name cifar10 --num_timesteps 1024 --dname original --batch_size 128 --num_workers 4 --num_iters 128 --num_steps 100000\n"
    ]
   },
   {
@@ -1446,31 +1446,61 @@ vscode-remote://vscode-01jzaze4hzn6sscj02462jvhh6.studio.lightning.ai/teamspace/
   },
   {
    "cell_type": "code",
-   "execution_count": 33,
+   "execution_count": 1,
    "metadata": {},
    "outputs": [
     {
-     "ename": "TypeError",
-     "evalue": "make_model() got an unexpected keyword argument 'arg'",
-     "output_type": "error",
-     "traceback": [
-      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
-      "\u001b[0;31mTypeError\u001b[0m                                 Traceback (most recent call last)",
-      "Cell \u001b[0;32mIn[33], line 2\u001b[0m\n\u001b[1;32m      1\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mcifar10_u\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m make_model\n\u001b[0;32m----> 2\u001b[0m model \u001b[38;5;241m=\u001b[39m \u001b[43mmake_model\u001b[49m\u001b[43m(\u001b[49m\u001b[43marg\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[38;5;241;43m6\u001b[39;49m\u001b[43m)\u001b[49m\n\u001b[1;32m      4\u001b[0m \u001b[38;5;66;03m#for name, param in model.named_parameters():\u001b[39;00m\n\u001b[1;32m      5\u001b[0m \u001b[38;5;66;03m#    print(name, param.shape)\u001b[39;00m\n\u001b[1;32m      6\u001b[0m \n\u001b[1;32m      7\u001b[0m \u001b[38;5;66;03m# Or just check the last few\u001b[39;00m\n\u001b[1;32m      8\u001b[0m \u001b[38;5;28;01mfor\u001b[39;00m name, param \u001b[38;5;129;01min\u001b[39;00m \u001b[38;5;28mlist\u001b[39m(model\u001b[38;5;241m.\u001b[39mnamed_parameters())[\u001b[38;5;241m-\u001b[39m\u001b[38;5;241m10\u001b[39m:]:\n",
-      "\u001b[0;31mTypeError\u001b[0m: make_model() got an unexpected keyword argument 'arg'"
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "============================================================\n",
+      "STEP 1: GENERATING IMAGES\n",
+      "============================================================\n",
+      "Using device: cuda\n",
+      "Loading model...\n",
+      "Loading checkpoint from ./checkpoints/cifar10/original/checkpoint.pt\n",
+      "Model loaded. Timesteps: 1024, Time scale: 1\n",
+      "Generating 20 images in 2 batches...\n",
+      "Generating batches:  50%|████████████            | 1/2 [01:50<01:50, 110.17s/it]\n",
+      "Generated 20 images in ./my_fid_images\n",
+      "\n",
+      "============================================================\n",
+      "STEP 2: PREPARING REFERENCE STATISTICS\n",
+      "============================================================\n",
+      "cifar10-32x32.npz already exists.\n",
+      "\n",
+      "============================================================\n",
+      "STEP 3: CALCULATING FID\n",
+      "============================================================\n",
+      "Loading dataset reference statistics from \"./cifar10-32x32.npz\"...\n",
+      "Loading Inception-v3 model...\n",
+      "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.\n",
+      "  warnings.warn(\n",
+      "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=Inception_V3_Weights.IMAGENET1K_V1`. You can also use `weights=Inception_V3_Weights.DEFAULT` to get the most up-to-date weights.\n",
+      "  warnings.warn(msg)\n",
+      "Loading images from \"./my_fid_images\"...\n",
+      "Calculating statistics for 20 images...\n",
+      "Computing Inception features: 100%|████████████| 2/2 [00:00<00:00,  5.21batch/s]\n",
+      "Calculating FID...\n",
+      "\n",
+      "============================================================\n",
+      "RESULTS\n",
+      "============================================================\n",
+      "Generated images: ./my_fid_images\n",
+      "Number of images: 20\n",
+      "FID Score: 502.8546\n",
+      "Results saved to: fid_results.txt\n",
+      "============================================================\n"
      ]
     }
    ],
    "source": [
-    "from cifar10_u import make_model\n",
-    "model = make_model()\n",
-    "\n",
-    "#for name, param in model.named_parameters():\n",
-    "#    print(name, param.shape)\n",
-    "\n",
-    "# Or just check the last few\n",
-    "for name, param in list(model.named_parameters())[-10:]:\n",
-    "    print(name, param.shape)\n"
+    "!python generate_and_calculate_fid.py \\\n",
+    "    --checkpoint ./checkpoints/cifar10/original/checkpoint.pt \\\n",
+    "    --output_dir ./my_fid_images \\\n",
+    "    --num_images 20 \\\n",
+    "    --batch_size 10 \\\n",
+    "    --fid_batch_size 10"
    ]
   },
   {

@@ -33,7 +33,7 @@ def make_argument_parser():
 
 @torch.no_grad() #basically the sampling loop using diffusionn object 
 def p_sample_loop(diffusion, noise, extra_args, device, eta=0, samples_to_capture=-1, need_tqdm=True , clip_value =3): #removed clip value
-    print('calling my ahh')
+    #print('calling my ahh')
     mode = diffusion.net_.training
     diffusion.net_.eval()
     img = noise
@@ -45,7 +45,7 @@ def p_sample_loop(diffusion, noise, extra_args, device, eta=0, samples_to_captur
         iter_ = tqdm(iter_)
     
     for i in iter_:
-        print('i',i)
+        #print('i',i)
         img = diffusion.p_sample(
             img,
             torch.full((img.shape[0],), i, dtype=torch.int64).to(device),
@@ -82,7 +82,7 @@ def make_visualization_(diffusion, device, image_size, need_tqdm=False, eta=0, c
 def make_visualization(diffusion, device, image_size, need_tqdm=False, eta=0, clip_value=1.2):
     images_ = make_visualization_(diffusion, device, image_size, need_tqdm=need_tqdm, eta=eta, clip_value=clip_value)
     #print(images_.shape)  
-    print("Image min/max before clipping:", images_.min().item(), images_.max().item())
+   # print("Image min/max before clipping:", images_.min().item(), images_.max().item())
     images_ = images_.permute(1, 2, 0).cpu().numpy()  # (H, W, C)
     images_ = (255 * (images_ + 1) / 2).clip(0, 255).astype(np.uint8)
     return images_
